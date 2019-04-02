@@ -1,0 +1,143 @@
+#include "range_finder.h"
+#include "tdc.h"
+
+#include <stdlib.h>
+
+#define BIT_BAND_ADDRESS_OUT(port, pin) (uint32_t *)(PERIPH_BB_BASE + ((uint32_t)(&port->ODR) - PERIPH_BASE) * 32 + pin * 4)
+#define BIT_BAND_ADDRESS_IN(port, pin) (uint32_t *)(PERIPH_BB_BASE + ((uint32_t)(&port->IDR) - PERIPH_BASE) * 32 + pin * 4)
+
+#define GP21_CONFIG_VALUE_ID_H (0x00060504U)
+#define GP21_CONFIG_VALUE_ID_L (0x03020100U)
+
+static uint32_t gp21_config_value_reg0 = GP21_CONFIG_VALUE_DEF_REG0 | 
+  GP21_CONFIG_VALUE_ANZ_FIRE_L(0U) | 
+  GP21_CONFIG_VALUE_DIV_FIRE(0U) | 
+  GP21_CONFIG_VALUE_ANZ_PER_CALRES_2 | 
+  GP21_CONFIG_VALUE_DIV_CLKHS_4 | 
+  GP21_CONFIG_VALUE_START_CLKHS_L(GP21_CONFIG_VALUE_START_CLKHS_ON) | 
+  GP21_CONFIG_VALUE_ANZ_PORT_2 | 
+  GP21_CONFIG_VALUE_TCYCLE_128US | 
+  GP21_CONFIG_VALUE_ANZ_FAKE_2 | 
+  GP21_CONFIG_VALUE_SEL_ECLK_TMP_L | 
+  GP21_CONFIG_VALUE_CALIBRATE_ON | 
+  GP21_CONFIG_VALUE_CAL_AUTO_ON | 
+  GP21_CONFIG_VALUE_MRANGE_1 | 
+  GP21_CONFIG_VALUE_STOP2_EDGE_RISE | 
+  GP21_CONFIG_VALUE_STOP1_EDGE_RISE | 
+  GP21_CONFIG_VALUE_START_EDGE_RISE | 
+  GP21_CONFIG_VALUE_ID0(GP21_CONFIG_VALUE_ID_L);
+
+static uint32_t gp21_config_value_reg1 = GP21_CONFIG_VALUE_DEF_REG1 | 
+  GP21_CONFIG_VALUE_HIT2_MR1_NO_ACTION | 
+  GP21_CONFIG_VALUE_HIT1_MR1_NO_ACTION | 
+  GP21_CONFIG_VALUE_FAST_INIT_OFF | 
+  GP21_CONFIG_VALUE_HITIN_SP2_1 | 
+  GP21_CONFIG_VALUE_HITIN_SP1_OFF | 
+  GP21_CONFIG_VALUE_CURR32_L | 
+  GP21_CONFIG_VALUE_SEL_FIRE_OUT | 
+  GP21_CONFIG_VALUE_ENSTART_FN_IN | 
+  GP21_CONFIG_VALUE_FIREIN_FN_IN | 
+  GP21_CONFIG_VALUE_ID1(GP21_CONFIG_VALUE_ID_L);
+
+static uint32_t gp21_config_value_reg2 = GP21_CONFIG_VALUE_DEF_REG2 | 
+  GP21_CONFIG_VALUE_TIMEOUT_INT_OFF | GP21_CONFIG_VALUE_HITEND_INT_OFF | GP21_CONFIG_VALUE_ALU_INT_OFF | 
+  GP21_CONFIG_VALUE_CH2_EDGE_ONE | 
+  GP21_CONFIG_VALUE_CH1_EDGE_ONE | 
+  (0U) | 
+  GP21_CONFIG_VALUE_ID2(GP21_CONFIG_VALUE_ID_L);
+
+static uint32_t gp21_config_value_reg3 = GP21_CONFIG_VALUE_DEF_REG3 | 
+  GP21_CONFIG_VALUE_EN_ERR_VAL_OFF | 
+  GP21_CONFIG_VALUE_SEL_TIMO_MB2_64 | 
+  (0U) | 
+  GP21_CONFIG_VALUE_ID3(GP21_CONFIG_VALUE_ID_L);
+
+static uint32_t gp21_config_value_reg4 = GP21_CONFIG_VALUE_DEF_REG4 | 
+  (0U) | 
+  GP21_CONFIG_VALUE_ID4(GP21_CONFIG_VALUE_ID_H);
+
+static uint32_t gp21_config_value_reg5 = GP21_CONFIG_VALUE_DEF_REG5 | 
+  (0U) | 
+  GP21_CONFIG_VALUE_STARTNOISE_OFF | 
+  GP21_CONFIG_VALUE_PH_NOISE_ON | 
+  (0U) | 
+  (0U) | 
+  GP21_CONFIG_VALUE_ID5(GP21_CONFIG_VALUE_ID_H);
+
+static uint32_t gp21_config_value_reg6 = GP21_CONFIG_VALUE_DEF_REG6 | 
+  GP21_CONFIG_VALUE_ANALOG_OFF | 
+  GP21_CONFIG_VALUE_NEG_STOP_TEMP_EX | 
+  GP21_CONFIG_VALUE_COMP_OFFSET_0MV | 
+  GP21_CONFIG_VALUE_RC_TIME_90US | 
+  GP21_CONFIG_VALUE_EEPROM_INT_OFF | 
+  GP21_CONFIG_VALUE_START_CLKHS_H(GP21_CONFIG_VALUE_START_CLKHS_ON) | 
+  GP21_CONFIG_VALUE_CYCLE_TEMP_1 | 
+  GP21_CONFIG_VALUE_CYCLE_TOF_1 | 
+  GP21_CONFIG_VALUE_HZ50 | 
+  GP21_CONFIG_VALUE_FIREO_HZ | 
+  GP21_CONFIG_VALUE_QUAD_RES_OFF | 
+  GP21_CONFIG_VALUE_DOUBLE_RES_OFF | 
+  GP21_CONFIG_VALUE_TEMP_PORT_1_4 | 
+  GP21_CONFIG_VALUE_ANZ_FIRE_H(0U) | 
+  GP21_CONFIG_VALUE_ID6(GP21_CONFIG_VALUE_ID_H);
+
+extern SPI_HandleTypeDef hspi1;
+
+static TDC tdc = {
+  .INTN = BIT_BAND_ADDRESS_IN(GPIOB, 8),
+  .SSN = BIT_BAND_ADDRESS_OUT(GPIOB, 6),
+  .SPI = &hspi1,
+  .RSTN = BIT_BAND_ADDRESS_OUT(GPIOB, 7),
+  .EN_STOP2 = BIT_BAND_ADDRESS_OUT(GPIOE, 0),
+  .EN_STOP1 = BIT_BAND_ADDRESS_OUT(GPIOE, 1),
+  .START = BIT_BAND_ADDRESS_OUT(GPIOD, 7),
+  .EN_START = BIT_BAND_ADDRESS_OUT(GPIOD, 6)
+};
+
+void RangeFinder_Init(void)
+{
+  TDC_Initialize(&tdc); 
+
+  TDC_SendCommand(&tdc, GP21_POWER_ON_RESET);
+  
+  TDC_WriteConfigurationRegister(&tdc, 0x0, gp21_config_value_reg0);
+  TDC_WriteConfigurationRegister(&tdc, 0x1, gp21_config_value_reg1);
+  TDC_WriteConfigurationRegister(&tdc, 0x2, gp21_config_value_reg2);
+  TDC_WriteConfigurationRegister(&tdc, 0x3, gp21_config_value_reg3);
+  TDC_WriteConfigurationRegister(&tdc, 0x4, gp21_config_value_reg4);
+  TDC_WriteConfigurationRegister(&tdc, 0x5, gp21_config_value_reg5);
+  TDC_WriteConfigurationRegister(&tdc, 0x6, gp21_config_value_reg6);
+  
+  bool result = TDC_TestCommunication(&tdc, gp21_config_value_reg1>>24);
+  if (!result)
+    exit(-1);
+
+  gp21_config_value_reg1 &= (~GP21_CONFIG_VALUE_HIT2_MASK) & (~GP21_CONFIG_VALUE_HIT1_MASK);
+  gp21_config_value_reg1 |= GP21_CONFIG_VALUE_HIT2_MR1_CH_START | GP21_CONFIG_VALUE_HIT1_MR1_CH_SPCH2_1;
+  TDC_WriteConfigurationRegister(&tdc, 0x1, gp21_config_value_reg1);
+  
+  gp21_config_value_reg2 &= (~(GP21_CONFIG_VALUE_TIMEOUT_INT_MASK | GP21_CONFIG_VALUE_HITEND_INT_MASK | GP21_CONFIG_VALUE_ALU_INT_MASK));
+  gp21_config_value_reg2 |= (GP21_CONFIG_VALUE_TIMEOUT_INT_ON | GP21_CONFIG_VALUE_HITEND_INT_ON | GP21_CONFIG_VALUE_ALU_INT_ON);
+  TDC_WriteConfigurationRegister(&tdc, 0x2, gp21_config_value_reg2);
+}
+
+int RangeFinder_TakeMeasurement(void)
+{
+  TDC_SendCommand(&tdc, GP21_INITIATE_TDC);
+
+  HAL_GPIO_WritePin(TDC_GP21_START_GPIO_Port, TDC_GP21_START_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(TDC_GP21_START_GPIO_Port, TDC_GP21_START_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(TDC_GP21_START_GPIO_Port, TDC_GP21_START_Pin, GPIO_PIN_RESET);
+  
+  TDC_WaitForInterrupt(&tdc);
+
+  uint16_t status = TDC_ReadStatusRegister(&tdc);
+  uint32_t result = TDC_ReadResultRegister(&tdc, 0x0);
+
+  if ((status & GP21_ERR_MASK_TDC_TIMEOUT) != 0)
+    return -1;
+  else {
+    int range = (int)(result * 500 / 65.536 / 66);
+    return range;
+  }
+}
